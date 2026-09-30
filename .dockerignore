@@ -1,0 +1,40 @@
+# Kept out of the build context. The rule is: anything a RUN produces, anything a
+# run produces, and anything that is evidence rather than code.
+.git
+.gitignore
+.dockerignore
+
+# Run artifacts. `stores/` and `results/` are mounted, not baked -- an image that
+# carried one run's records would resume from them the first time it started,
+# which is a very confusing way to find out you copied someone else's store.
+stores/
+gm_records/
+results/
+logs/
+
+# The corpus is mounted read-only (GMB_ROOT). It is a benchmark asset with its own
+# provenance and its own judge prompt hash; baking a copy into the image is how two
+# images end up scoring against two corpora that are both called GroupMemBench.
+GroupMemBench/
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+
+# Not published, so not in the image either -- the Dockerfile must not COPY a file
+# a fresh clone does not have.
+ALGORITHM.md
+
+# Scratch from the OSS restructuring: equivalence probes and their golden dumps.
+# They are evidence for that refactor, not part of the package.
+.oss_*.py
+.oss_*.sh
+.golden_*.json
+
+# Figures. They belong to the paper, not to a runtime.
+*.png
+*.svg

@@ -1,0 +1,49 @@
+# Run artifacts, kept out of the code repo (regenerable by the pipeline):
+#   stores/     what bench/run_ingest.py writes beside the database: the prompt
+#               fingerprints the resume guard checks, plus the records export.
+#               With record_store=pg, Postgres itself is the authority
+#   gm_records/ the jsonl record store's DEFAULT root, i.e. <name>__<variant>/
+#               <channel>.jsonl. With that backend there is no database, so this
+#               directory is the store -- one run's data, not code
+#   results/    produced by run_qa.py and consumed by summarize.py
+stores/
+gm_records/
+results/
+
+# Superseded module copies; the shipped tree is the finalized configuration only
+.slim_backup/
+
+# Benchmark dataset, located through $GMB_ROOT
+GroupMemBench/
+
+# Credentials
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Build output (`pip wheel .`, `python -m build`)
+build/
+dist/
+
+# Internal algorithm/code walkthrough, not published. It tracks module paths and
+# line numbers, so it goes stale on every refactor (the OSS restructuring left 50
+# dead references in it) -- exactly the drift the arguments-live-in-the-code rule
+# exists to avoid. Kept locally as a reading aid; README.md is the published set.
+ALGORITHM.md
+
+# Scratch from the OSS restructuring: the equivalence probes and the golden node
+# dumps they diff against. Evidence that this tree behaves like the pre-refactor
+# one, not part of the method -- and the dumps are keyed to one local store, so
+# they mean nothing to anyone who did not run that ingestion. Kept on disk,
+# out of the repo (.dockerignore excludes the same two globs).
+.oss_*.py
+.oss_*.sh
+.golden_*.json
+
+# OS
+.DS_Store

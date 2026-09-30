@@ -1,0 +1,108 @@
+# GroupMem — packaging.
+#
+# THE DEPENDENCY SPLIT IS THE POINT. What `groupmem` needs to retrieve and answer
+# is `rank-bm25` (which pulls `numpy`), and nothing else. Everything that made this
+# system hard to run — a Postgres server, the vendor SDK, an API key — is behind an
+# extra, because the provider directories exist precisely so that none of them is
+# load-bearing for the method:
+#
+#   pip install groupmem                  # the method; jsonl rows, in-memory index
+#   pip install groupmem[dashscope]       # the models the default benchmark uses
+#   pip install groupmem[pg]              # the pgvector store the default benchmark uses
+#   pip install groupmem[all]             # both, i.e. what bench/ needs
+#
+# The base install can `search`, `current` and load a store; `add` and `answer`
+# additionally need an LLM, which is a provider, which is an extra. That is not a
+# crippled tier — it is where the line between the method and the deployment falls.
+#
+# PINNED IN THE EXTRAS, RANGED IN THE CORE. The versions under [project.optional-
+# dependencies] are the ones the release ran against (see requirements.txt for the
+# same list with a comment per line); a model endpoint's client is exactly the kind
+# of dependency whose minor bump changes a response shape, so an arm that must
+# reproduce gets an `==`. The two core packages are ranged because BM25 over
+# tokens has no such surface.
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "groupmem"
+version = "0.1.0"
+description = "Revision-aware long-term memory for group conversations: an agentic write side that builds a decision graph, and a four-tool read side that answers against it."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+keywords = ["memory", "agent", "rag", "retrieval", "group-chat", "llm"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    # The read side's lexical channel. `utils/lexical.py` imports BM25Okapi at
+    # module level and the fusion is two-channel by design, so this is not
+    # optional: without it the dense channel would be the whole retriever, which
+    # is a different (and worse) system, not a degraded install.
+    "rank-bm25>=0.2.2",
+    # Pulled in by rank-bm25 anyway; named here because `vector_stores/inmemory`
+    # uses it directly for the cosine scan when it is importable.
+    "numpy>=1.21",
+]
+
+[project.optional-dependencies]
+# The providers the default benchmark configuration runs through.
+dashscope = [
+    "dashscope==1.27.0",
+    # `reranker/dashscope.py` calls the text-rerank endpoint over plain HTTP —
+    # the SDK has no rerank surface — so this belongs to the dashscope extra
+    # rather than being optional within it.
+    "requests==2.32.5",
+]
+pg = ["psycopg2-binary==2.9.12"]
+# `embeddings/openai_compat.py` -- the OpenAI-protocol embedder, imported lazily and
+# only on that branch. The default configuration uses `dashscope_native` instead, so
+# this is for pointing the method at another provider.
+openai = ["openai==3.3.1"]
+all = [
+    "dashscope==1.27.0",
+    "requests==2.32.5",
+    "psycopg2-binary==2.9.12",
+    "openai==3.3.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/AlibabaResearch/EGMemory"
+Repository = "https://github.com/AlibabaResearch/EGMemory"
+
+# The HTTP service, so a pip install is also a runnable memory backend and not only
+# a library. It is stdlib-only (see groupmem/server.py) -- no extra pulls a web
+# framework in, because an install that behaved differently from the packaged
+# artifact is exactly what the dependency split above exists to prevent.
+[project.scripts]
+groupmem-server = "groupmem.server:main"
+
+[tool.setuptools]
+# `bench/` is deliberately NOT packaged. It is the measurement harness, not part
+# of the method (its own docstrings say so), it claims a very generic top-level
+# name, and it is meant to be run from a checkout where the corpus and the results
+# directory sit next to it. The Docker image carries it for that reason.
+packages = ["groupmem",
+            "groupmem.configs",
+            "groupmem.embeddings",
+            "groupmem.llms",
+            "groupmem.memory",
+            "groupmem.prompts",
+            "groupmem.reranker",
+            "groupmem.storage",
+            "groupmem.utils",
+            "groupmem.vector_stores"]
+
+[tool.setuptools.package-data]
+# THE PROMPTS SHIP WITH THE CODE. They are not configuration — the write prompt
+# determines what a record contains — and the code loads them by package path, so
+# an install that omitted them could not run at all. This is also why they live in
+# `groupmem/prompts/` and not in a top-level directory: an installed package has no
+# repo root to look beside.
+"groupmem.prompts" = ["*.txt"]

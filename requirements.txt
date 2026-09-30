@@ -1,0 +1,20 @@
+# Pinned dependency versions.
+#
+# This file = pyproject's `.[all]`: every dependency needed to reproduce the
+# benchmark runs, pinned. You do not need it to run the
+# method itself
+# (JSONL rows + in-process index): `pip install -e .` installs only rank-bm25 and
+# numpy. The rationale for the layering is at the top of pyproject.toml.
+dashscope==1.27.0
+numpy==2.4.6
+rank-bm25==0.2.2
+psycopg2-binary==2.9.12
+# groupmem/reranker/dashscope.py calls the DashScope text-rerank endpoint directly
+# over HTTP (the SDK has no rerank surface), so this is required, not optional.
+requests==2.32.5
+
+# Optional: the OpenAI-protocol embedder in
+# groupmem/embeddings/openai_compat.py, imported lazily only for the "openai" /
+# "openai_compat" / "dashscope" embedder backends; not needed on "dashscope_native"
+# (the default benchmark embedder).
+openai==3.3.1

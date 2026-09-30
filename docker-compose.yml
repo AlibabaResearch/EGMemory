@@ -1,0 +1,151 @@
+# The benchmark infrastructure: Postgres WITH pgvector, and the runner.
+#
+#   docker compose build
+#   docker compose up -d server                           # the memory service
+#   curl localhost:8080/health
+#   docker compose run --rm groupmem python examples/offline_smoke.py   # install proof
+#   export DASHSCOPE_API_KEY=sk-...
+#   docker compose run --rm groupmem python bench/run_ingest.py --domain Technology \
+#       --channels-limit 1 --limit 50 --variant smoke     # a cheap pre-flight
+#
+# TWO SERVICES OVER ONE IMAGE, because they are two different jobs: `server` is a
+# long-running process something else talks to, `groupmem` is where you run a
+# command and read its output. Splitting them means `compose up` does not start a
+# benchmark and `compose run` does not compete with the service for the port.
+#
+# The corpus is NOT included: point GMB_HOST_ROOT at your GroupMemBench checkout.
+#
+#   GMB_HOST_ROOT=/path/to/GroupMemBench docker compose run --rm groupmem \
+#       python bench/run_ingest.py --domain Technology
+#
+# WHY THIS FILE IS SHORT. `ensure_table` issues `CREATE EXTENSION IF NOT EXISTS
+# vector` itself, so there is no init SQL to mount and no schema to keep in sync
+# here -- swapping the base image for `pgvector/pgvector` is the whole difference
+# between "psycopg2 connects and then every write fails" and a working store.
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: groupmem
+      POSTGRES_USER: groupmem
+      POSTGRES_PASSWORD: groupmem
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # The healthcheck is load-bearing, not hygiene: `depends_on: service_healthy`
+    # is what stops an ingest from starting against a Postgres that is still
+    # initialising. Without it the first `connect()` fails and, because the write
+    # side treats a channel with no rows as "nothing done yet", a retry looks
+    # exactly like a fresh run.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U groupmem -d groupmem"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    # Published so you can psql into the store from the host. Change the host side
+    # if 5432 is taken; nothing in the image depends on the published port.
+    ports:
+      - "5433:5432"
+
+  # THE DROP-IN MEMORY SERVICE. Everything it needs comes from the environment, so
+  # replacing another memory backend with this one is a base_url and these variables
+  # -- see groupmem/server.py for the full list and the endpoints.
+  server:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${GROUPMEM_PORT:-8080}:8080"
+    environment:
+      # WHAT ANSWERS. Without an LLM the service still serves /search, /current and
+      # /stats -- useful against an already-ingested store -- and returns a 400 that
+      # names the missing piece on /memories and /answer. There is no default model
+      # on purpose: a guessed one answers plausibly and differently.
+      #
+      # SETTING THE MODEL IS ENOUGH; the backend then defaults to openai_compat,
+      # which is the /v1/chat/completions shape vLLM, Ollama, DeepSeek, OpenRouter
+      # and DashScope's compatible mode all speak. A backend named WITHOUT a model
+      # fails at startup naming the model -- deliberately, rather than coming up
+      # quietly unable to write.
+      GROUPMEM_LLM_MODEL: ${GROUPMEM_LLM_MODEL:-}
+      GROUPMEM_LLM_BACKEND: ${GROUPMEM_LLM_BACKEND:-}
+      GROUPMEM_LLM_BASE_URL: ${GROUPMEM_LLM_BASE_URL:-}
+      GROUPMEM_LLM_API_KEY: ${GROUPMEM_LLM_API_KEY:-${DASHSCOPE_API_KEY:-}}
+      GROUPMEM_LLM_THINKING_PARAM: ${GROUPMEM_LLM_THINKING_PARAM:-}
+      # WHAT IT STORES INTO. Unset means the offline default: the hashing embedder,
+      # the in-memory index and a JSONL log under /app/gm_records. To run the
+      # full benchmark configuration instead, set all four:
+      #   GROUPMEM_EMBEDDER=dashscope_native GROUPMEM_RERANKER=dashscope
+      #   GROUPMEM_RECORD_STORE=pg          GROUPMEM_VECTOR_STORE=pgvector
+      # SWITCHING EMBEDDER AFTER INGEST IS A RE-INGEST, not a restart: stored
+      # vectors and query vectors from different models still cosine to a number,
+      # so the failure is silently worse retrieval rather than an error.
+      GROUPMEM_NAME: ${GROUPMEM_NAME:-groupmem}
+      GROUPMEM_EMBEDDER: ${GROUPMEM_EMBEDDER:-}
+      GROUPMEM_EMBEDDER_MODEL: ${GROUPMEM_EMBEDDER_MODEL:-}
+      GROUPMEM_EMBEDDER_BASE_URL: ${GROUPMEM_EMBEDDER_BASE_URL:-}
+      GROUPMEM_EMBEDDER_API_KEY: ${GROUPMEM_EMBEDDER_API_KEY:-}
+      GROUPMEM_RERANKER: ${GROUPMEM_RERANKER:-}
+      GROUPMEM_RECORD_STORE: ${GROUPMEM_RECORD_STORE:-}
+      GROUPMEM_VECTOR_STORE: ${GROUPMEM_VECTOR_STORE:-}
+      GROUPMEM_VARIANT: ${GROUPMEM_VARIANT:-}
+      # Unset means NO AUTHENTICATION, which is right on a private network and
+      # wrong the moment the port is published anywhere else. The startup banner
+      # says which mode it came up in.
+      GROUPMEM_API_KEY: ${GROUPMEM_API_KEY:-}
+      # Reached only when GROUPMEM_RECORD_STORE=pg; harmless otherwise. See the
+      # note on the groupmem service for why these are libpq's names.
+      PG_DBNAME: groupmem
+      PG_USER: groupmem
+      PGHOST: db
+      PGPASSWORD: groupmem
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      DASHSCOPE_BASE_URL: ${DASHSCOPE_BASE_URL:-}
+    volumes:
+      - ./groupmem:/app/groupmem
+      # THE MEMORIES, on the host. Without this the JSONL store lives in the
+      # container's filesystem and `compose down` is a memory wipe.
+      - ./gm_records:/app/gm_records
+    restart: unless-stopped
+
+  groupmem:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # `pgvector.connect()` passes ONLY dbname and user to psycopg2; host, port
+      # and password come from libpq's own environment. That is why these are
+      # PGHOST/PGPASSWORD rather than a code change -- the connection string was
+      # never a parameter of this system, and it does not need to become one.
+      PG_DBNAME: groupmem
+      PG_USER: groupmem
+      PGHOST: db
+      PGPASSWORD: groupmem
+      # Passed through from the host, never baked. Empty is fine: everything
+      # except `add` and `answer` runs without it.
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      DASHSCOPE_BASE_URL: ${DASHSCOPE_BASE_URL:-}
+    volumes:
+      # The working tree over the image's copy, so an edit takes effect without a
+      # rebuild (the install is editable; see the Dockerfile).
+      - ./groupmem:/app/groupmem
+      - ./bench:/app/bench
+      - ./examples:/app/examples
+      # Run output on the HOST, because that is where you will want to read it:
+      # stores/ holds the records export and the prompt fingerprints the resume
+      # guard checks, results/ holds the per-question files summarize.py scores.
+      - ./stores:/app/stores
+      - ./results:/app/results
+      # Read-only on purpose. The corpus is the measurement's other half; a run
+      # that could write to it could change what the next run is measured against.
+      - ${GMB_HOST_ROOT:-./GroupMemBench}:/data/GroupMemBench:ro
+    # No long-running process wanted from THIS service: it is a place to run
+    # commands from, so pass one. `docker compose up groupmem` would start the
+    # server (the image's default command) a second time and fight over the port;
+    # `up server` is the service that is meant to do that.
+    command: ["python", "examples/offline_smoke.py"]
+
+volumes:
+  pgdata:
